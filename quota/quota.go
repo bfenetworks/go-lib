@@ -18,7 +18,13 @@
 // For RMB quotas, values are stored in Redis as integers with a fixed
 // precision of 1e-8 yuan per unit, so that Lua scripts can operate on
 // integers only and avoid floating point errors.
+//
+// Model prices are kept as float64 (yuan per token) until a request
+// cost is computed; CalcCostUnits converts usage * price into a
+// fixed-point integer for Redis deduction.
 package quota
+
+import "math"
 
 const (
 	// UnitTotalToken is the unit for token-based quotas.
@@ -60,12 +66,28 @@ func PtrIsRMB(unit *string) bool {
 // RmbToFixedPoint converts yuan to a fixed-point integer.
 // One returned unit equals 1e-8 yuan.
 func RmbToFixedPoint(yuan float64) int64 {
-	return int64(yuan * RmbPrecision)
+	return int64(math.Round(yuan * RmbPrecision))
 }
 
 // FixedPointToRmb converts a fixed-point integer back to yuan.
 func FixedPointToRmb(value int64) float64 {
 	return float64(value) / RmbPrecision
+}
+
+// CalcCostUnits computes the cost of a usage amount at the given price
+// (yuan per unit) and returns it as a fixed-point integer.
+//
+// One returned unit equals 1e-8 yuan, suitable for Redis deduction.
+// The price is multiplied by RmbPrecision first so that prices with
+// more than 8 decimal places keep their precision until the final
+// rounding step. The result is rounded (not truncated) so that errors
+// stay unbiased; each billing item should be converted separately and
+// the integers summed, instead of summing float costs first.
+func CalcCostUnits(usage int64, priceYuan float64) int64 {
+	if usage <= 0 || priceYuan <= 0 {
+		return 0
+	}
+	return int64(math.Round(float64(usage) * (priceYuan * RmbPrecision)))
 }
 
 // ToRedisValue converts a quota value to a Redis fixed-point integer.
