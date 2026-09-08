@@ -132,3 +132,59 @@ func TestFixedPointToRmb(t *testing.T) {
 		}
 	}
 }
+
+func TestRmbToFixedPointRounding(t *testing.T) {
+	// Values beyond 8 decimal places must be rounded, not truncated.
+	if got := RmbToFixedPoint(7.6234102728e-08); got != 8 {
+		t.Errorf("RmbToFixedPoint(7.6234102728e-08) = %d, want 8 (rounded)", got)
+	}
+	// Exactly representable values keep their fixed-point value.
+	if got := RmbToFixedPoint(0.00000001); got != 1 {
+		t.Errorf("RmbToFixedPoint(0.00000001) = %d, want 1", got)
+	}
+}
+
+func TestCalcCostUnits(t *testing.T) {
+	cases := []struct {
+		usage int64
+		price float64
+		want  int64
+	}{
+		// zero usage or zero price costs nothing
+		{0, 0.000002, 0},
+		{-1, 0.000002, 0},
+		{1000, 0, 0},
+		// prices with <= 8 decimals are lossless
+		{1000, 0.000002, 200000},
+		{1000, 0.00000001, 1000},
+		// rounding, not truncation: 10 * 0.15 = 1.5 -> 2
+		{10, 1.5e-9, 2},
+		// boyue catalog prices with 10-12 decimal places
+		// 1e6 * 7.6234102728e-08 * 1e8 = 7623410.2728
+		{1000000, 7.6234102728e-08, 7623410},
+		// 1000 * 4.141631732e-06 * 1e8 = 414163.1732
+		{1000, 4.141631732e-06, 414163},
+	}
+	for _, c := range cases {
+		if got := CalcCostUnits(c.usage, c.price); got != c.want {
+			t.Errorf("CalcCostUnits(%d, %v) = %d, want %d", c.usage, c.price, got, c.want)
+		}
+	}
+}
+
+func TestCalcCostUnitsConsistentWithFixedPoint(t *testing.T) {
+	// For prices with at most 8 decimal places, per-item conversion must
+	// agree exactly with converting the price first and multiplying as
+	// integers (the pre-v0.6 behavior).
+	prices := []float64{0.000002, 0.000008, 0.0000005, 0.03, 0.5}
+	usages := []int64{1, 7, 1000, 12345, 1000000}
+	for _, p := range prices {
+		fp := RmbToFixedPoint(p)
+		for _, u := range usages {
+			if got, want := CalcCostUnits(u, p), u*fp; got != want {
+				t.Errorf("CalcCostUnits(%d, %v) = %d, want %d (= usage * RmbToFixedPoint)",
+					u, p, got, want)
+			}
+		}
+	}
+}
